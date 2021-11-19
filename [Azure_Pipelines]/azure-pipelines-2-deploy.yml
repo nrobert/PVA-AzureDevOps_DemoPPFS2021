@@ -1,0 +1,107 @@
+trigger: none
+
+variables:
+  PowerPlatformSPNName: 'PowerPlatformNRO-PRD'
+  PackedSolutionFolder: $(Build.BinariesDirectory)/Packed/PpfsBot.zip
+  PowerPlatformSolutionNamePlaceholder: '#PpfsBotSolutionName#'
+  #PowerPlatformSolutionNameValue: '' > in variable
+  PowerPlatformSolutionDescriptionPlaceholder: '#PpfsBotSolutionDescription#'
+  #PowerPlatformSolutionDescriptionValue: '' > in variable
+  BotNamePlaceholder: '#PpfsBotBotName#'
+  #BotNameValue: '' > in variable
+  ApiRootPlaceholder: '#PpfsBotApiRoot#'
+  #ApiRootValue: '' > in variable
+  ApiFunctionCodePlaceholder: '#PpfsBotApiFunctionCode#'
+  #ApiFunctionCodeValue: '' > in variable
+  ApiFunctionOAuthTypePlaceholder: '#PpfsBotApiOAuthType#'
+  #ApiFunctionOAuthTypeValue: '' > in variable
+  ApiFunctionOAuthTenantPlaceholder: '#PpfsBotApiOAuthTenant#'
+  #ApiFunctionOAuthTenantValue: '' > in variable
+  ApiFunctionOAuthAudiencePlaceholder: '#PpfsBotApiOAuthAudience#'
+  #ApiFunctionOAuthAudienceValue: '' > in variable
+  ApiFunctionOAuthClientIdPlaceholder: '#PpfsBotApiOAuthClientId#'
+  #ApiFunctionOAuthClientIdValue: '' > in variable
+  ApiFunctionOAuthSecretPlaceholder: '#PpfsBotApiOAuthSecret#'
+  #ApiFunctionOAuthSecretValue: '' > in variable
+
+pool:
+  vmImage: windows-latest
+
+steps:
+# Regex for variables replacement before deployment - do not use UTF8 to avoid BOM error on import
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - Solution name'
+  inputs:
+    InputSearchPattern: '$(Build.SourcesDirectory)/Other/Solution.xml'
+    FindRegex: '<SolutionManifest>(\s+)<UniqueName>$(PowerPlatformSolutionNamePlaceholder)</UniqueName>(\s+)<LocalizedNames>(\s+)<LocalizedName description="$(PowerPlatformSolutionDescriptionPlaceholder)"'
+    ReplaceRegex: '<SolutionManifest>$1<UniqueName>$(PowerPlatformSolutionNameValue)</UniqueName>$2<LocalizedNames>$3<LocalizedName description="$(PowerPlatformSolutionDescriptionValue)"'
+    UseUTF8: false
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - Bot name'
+  inputs:
+    InputSearchPattern: '$(Build.SourcesDirectory)/bots/**/bot.xml'
+    FindRegex: '<name>$(BotNamePlaceholder)</name>'
+    ReplaceRegex: '<name>$(BotNameValue)</name>'
+    UseUTF8: false
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API URL'
+  inputs:
+    InputSearchPattern: '$(Build.SourcesDirectory)/Workflows/*.json'
+    FindRegex: '"uri":(\s)*"$(ApiRootPlaceholder)([\w\-\._~:\/?#[\]@!\$&''\(\)\*\+,;=.]+)?"'
+    ReplaceRegex: '"uri":$1"$(ApiRootValue)$2"'
+    UseUTF8: false
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API Function code'
+  inputs:
+    InputSearchPattern: '$(Build.SourcesDirectory)/Workflows/*.json'
+    FindRegex: '"x-functions-key":(\s)*"$(ApiFunctionCodePlaceholder)"'
+    ReplaceRegex: '"x-functions-key":$1"$(ApiFunctionCodeValue)"'
+    UseUTF8: false
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API Function OAuth setup'
+  inputs:
+    InputSearchPattern: '$(Build.SourcesDirectory)/Workflows/*.json'
+    FindRegex: '"authentication":(\s)*{(\s)*"type":(\s)*"$(ApiFunctionOAuthTypePlaceholder)",(\s)*"tenant":(\s)*"$(ApiFunctionOAuthTenantPlaceholder)",(\s)*"audience":(\s)*"$(ApiFunctionOAuthAudiencePlaceholder)",(\s)*"clientId":(\s)*"$(ApiFunctionOAuthClientIdPlaceholder)",(\s)*"secret":(\s)*"$(ApiFunctionOAuthSecretPlaceholder)"(\s)*}'
+    ReplaceRegex: '"authentication":$1{$2"type":$3"$(ApiFunctionOAuthTypeValue)",$4"tenant":$5"$(ApiFunctionOAuthTenantValue)",$6"audience":$7"$(ApiFunctionOAuthAudienceValue)",$8"clientId":$9"$(ApiFunctionOAuthClientIdValue)",$10"secret":$11"$(ApiFunctionOAuthSecretValue)"$12}'
+    UseUTF8: false
+
+# Removing Azure pipelines folder from sources before packing for Power Platform
+- task: CmdLine@2
+  inputs:
+    script: |
+      echo Switching to Sources folder and content
+      cd /d $(Build.SourcesDirectory)
+      
+      echo Removing Azure pipeline files for Power Platform Package
+      rm -rf ./[Azure_Pipelines]
+  displayName: Clear Azure Pipeline files for packaging
+
+# Power Platform actions: Install > Pack > Export
+- task: PowerPlatformToolInstaller@0
+  displayName: 'Power Platform Tool Installer'
+  inputs:
+    DefaultVersion: true
+
+- task: PowerPlatformPackSolution@0
+  displayName: 'Power Platform Pack Solution'
+  inputs:
+    SolutionSourceFolder: '$(Build.SourcesDirectory)'
+    SolutionOutputFile: '$(PackedSolutionFolder)'
+
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish Artifact - Packed solution (for backup)'
+  inputs:
+    PathtoPublish: '$(PackedSolutionFolder)'
+    ArtifactName: '$(Build.BuildId)'
+
+- task: PowerPlatformImportSolution@0
+  displayName: 'Power Platform Import Solution on Power Platform'
+  inputs:
+    authenticationType: 'PowerPlatformSPN'
+    PowerPlatformSPN: '$(PowerPlatformSPNName)'
+    SolutionInputFile: '$(PackedSolutionFolder)'
+    PublishWorkflows: true

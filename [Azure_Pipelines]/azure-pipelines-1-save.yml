@@ -1,0 +1,113 @@
+trigger: none
+
+variables:
+  PowerPlatformSPNName: 'PowerPlatformNRO-DEV'
+  PowerPlatformInputSolutionName: 'PVA_PpfsBot_DEV'
+  ExportedSolutionOutputFile: $(Build.BinariesDirectory)/Export/PpfsBotDev.zip
+  UnpackedSolutionFolder: $(Build.BinariesDirectory)/Unzip
+  PowerPlatformSolutionNamePlaceholder: '#PpfsBotSolutionName#'
+  PowerPlatformSolutionDescriptionPlaceholder: '#PpfsBotSolutionDescription#'
+  BotNamePlaceholder: '#PpfsBotBotName#'
+  ApiRootPlaceholder: '#PpfsBotApiRoot#'
+  ApiFunctionCodePlaceholder: '#PpfsBotApiFunctionCode#'
+  ApiFunctionOAuthTypePlaceholder: '#PpfsBotApiOAuthType#'
+  ApiFunctionOAuthTenantPlaceholder: '#PpfsBotApiOAuthTenant#'
+  ApiFunctionOAuthAudiencePlaceholder: '#PpfsBotApiOAuthAudience#'
+  ApiFunctionOAuthClientIdPlaceholder: '#PpfsBotApiOAuthClientId#'
+  ApiFunctionOAuthSecretPlaceholder: '#PpfsBotApiOAuthSecret#'
+
+# Pool should be windows for Replace task
+pool:
+  vmImage: windows-latest
+
+steps:
+# Checkout to be able to execute git actions at the end of the pipeline
+- checkout: self
+  persistCredentials: true
+  clean: true
+
+# Power Platform > Install, Export, Unpack
+- task: PowerPlatformToolInstaller@0
+  displayName: 'Power Platform Tool Installer '
+  inputs:
+    DefaultVersion: true
+
+- task: PowerPlatformExportSolution@0
+  displayName: 'Power Platform Export Solution '
+  inputs:
+    authenticationType: PowerPlatformSPN
+    PowerPlatformSPN: $(PowerPlatformSPNName)
+    SolutionName: $(PowerPlatformInputSolutionName)
+    SolutionOutputFile: '$(ExportedSolutionOutputFile)'
+
+- task: PowerPlatformUnpackSolution@0
+  displayName: 'Power Platform Unpack Solution '
+  inputs:
+    SolutionInputFile: '$(ExportedSolutionOutputFile)'
+    SolutionTargetFolder: '$(UnpackedSolutionFolder)'
+
+# Modify solution content to hide specific items
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - Solution Name'
+  inputs:
+    InputSearchPattern: '$(Build.BinariesDirectory)/Unzip/Other/Solution.xml'
+    FindRegex: '<SolutionManifest>(\s+)<UniqueName>(?:.*)</UniqueName>(\s+)<LocalizedNames>(\s+)<LocalizedName description="(?:[^"]*)"'
+    ReplaceRegex: '<SolutionManifest>$1<UniqueName>$(PowerPlatformSolutionNamePlaceholder)</UniqueName>$2<LocalizedNames>$3<LocalizedName description="$(PowerPlatformSolutionDescriptionPlaceholder)"'
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - Bot Name'
+  inputs:
+    InputSearchPattern: '$(Build.BinariesDirectory)/Unzip/bots/**/bot.xml'
+    FindRegex: '<name>(.*)</name>'
+    ReplaceRegex: '<name>$(BotNamePlaceholder)</name>'
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API URL'
+  inputs:
+    InputSearchPattern: '$(Build.BinariesDirectory)/Unzip/Workflows/*.json'
+    FindRegex: '"uri":(\s)*"(?:https:\/\/[\w.-]+(?:\.[\w\.-]+)+)([\w\-\._~:\/?#[\]@!\$&''\(\)\*\+,;=.]+)?"'
+    ReplaceRegex: '"uri":$1"$(ApiRootPlaceholder)$2"'
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API Function code'
+  inputs:
+    InputSearchPattern: '$(Build.BinariesDirectory)/Unzip/Workflows/*.json'
+    FindRegex: '"x-functions-key":(\s)*"[^"]*"'
+    ReplaceRegex: '"x-functions-key":$1"$(ApiFunctionCodePlaceholder)"'
+
+- task: RegexReplace@3
+  displayName: 'RegEx Find & Replace - API Function OAuth setup'
+  inputs:
+    InputSearchPattern: '$(Build.BinariesDirectory)/Unzip/Workflows/*.json'
+    FindRegex: '"authentication":(\s*){(\s*)"type":(\s*)"([^"]*)",(\s*)"tenant":(\s*)"([^"]*)",(\s*)"audience":(\s*)"([^"]*)",(\s*)"clientId":(\s*)"([^"]*)",(\s*)"secret":(\s*)"([^"]*)"(\s*)}'
+    ReplaceRegex: '"authentication":$1{$2"type":$3"$(ApiFunctionOAuthTypePlaceholder)",$5"tenant":$6"$(ApiFunctionOAuthTenantPlaceholder)",$8"audience":$9"$(ApiFunctionOAuthAudiencePlaceholder)",$11"clientId":$12"$(ApiFunctionOAuthClientIdPlaceholder)",$14"secret":$15"$(ApiFunctionOAuthSecretPlaceholder)"$17}'
+
+# Git - Save solution
+- script: |
+    echo Switching to Sources folder and content
+    cd /d $(Build.SourcesDirectory)
+    
+    echo Backup pipeline files
+    mkdir -p $(Build.BinariesDirectory)/Unzip/[Azure_Pipelines]
+    cp -r $(Build.SourcesDirectory)/[Azure_Pipelines] $(Build.BinariesDirectory)/Unzip/[Azure_Pipelines]
+
+    echo Clean existing sources
+    rm -rf ./*
+    
+    echo Copying new files
+    cp -r $(Build.BinariesDirectory)/Unzip/. .
+    
+    echo git add
+    git add --all
+    
+    echo git config
+    git config user.email "CI@nicolasrobert33gmail.onmicrosoft.com"
+    git config user.name "CI"
+    
+    echo git commit
+    git commit -m "New solution import [skip ci]"
+    
+    echo push
+    git push -f origin HEAD:%BUILD_SOURCEBRANCHNAME%
+  workingDirectory: '$(UnpackedSolutionFolder)'
+  displayName: 'Command Line Script - Git push'
